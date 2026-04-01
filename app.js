@@ -2,6 +2,8 @@
 // CONFIG
 // ==============================
 
+const DEBUG = false; // Set true to append processed OCR canvases to the DOM
+
 const SCALE = 4;
 const REF = 300;
 const EXPORT_SIZE = REF * SCALE;
@@ -87,6 +89,7 @@ const uploadInput    = document.getElementById('upload');
 const scanAllBtn     = document.getElementById('scanAllBtn');
 const generateAllBtn = document.getElementById('generateAllBtn');
 const exportAllBtn   = document.getElementById('exportAllBtn');
+const clearAllBtn    = document.getElementById('clearAllBtn');
 const sidebarList    = document.getElementById('sidebarList');
 const imageCount     = document.getElementById('imageCount');
 const mainArea       = document.getElementById('mainArea');
@@ -307,7 +310,7 @@ function buildJobCard(job) {
 
   if (job.editorState) {
     const genBtn = document.createElement('button');
-    genBtn.textContent = 'Generate';
+    genBtn.textContent = 'Regenerate';
     genBtn.addEventListener('click', function() { generateJob(job.id); });
     actions.appendChild(genBtn);
   }
@@ -414,12 +417,12 @@ function rerenderJobCard(jobId) {
 
 function updateBatchButtons() {
   const hasJobs      = jobs.length > 0;
-  const hasScanned   = jobs.some(function(j) { return j.status === 'scanned' || j.status === 'generated'; });
   const hasGenerated = jobs.some(function(j) { return j.status === 'generated'; });
 
   scanAllBtn.classList.toggle('hidden', !hasJobs);
-  generateAllBtn.classList.toggle('hidden', !hasScanned);
+  generateAllBtn.classList.add('hidden'); // generation is automatic after scan
   exportAllBtn.classList.toggle('hidden', !hasGenerated);
+  clearAllBtn.classList.toggle('hidden', !hasJobs);
 }
 
 // ==============================
@@ -434,8 +437,8 @@ function buildEditorGridUI(job) {
   if (!gridEl) return;
 
   gridEl.innerHTML = '';
-  gridEl.style.gridTemplateColumns = 'repeat(' + es.gridSize + ', 42px)';
-  gridEl.style.gridTemplateRows    = 'repeat(' + es.gridSize + ', 42px)';
+  gridEl.style.gridTemplateColumns = 'repeat(' + es.gridSize + ', 46px)';
+  gridEl.style.gridTemplateRows    = 'repeat(' + es.gridSize + ', 46px)';
   gridEl.style.gap = '1px';
 
   // Helper: find the next (or prev) input that belongs to a tile cell
@@ -568,7 +571,7 @@ function readEditorTiles(job) {
 // SCAN (single job)
 // ==============================
 
-function scanJob(jobId) {
+async function scanJob(jobId) {
   const job = getJob(jobId);
   if (!job) return;
 
@@ -581,7 +584,7 @@ function scanJob(jobId) {
     const gridCanvas = cropGrid(tempCanvas);
     const gridSize   = detectGridSize(gridCanvas);
     const cells      = splitIntoCells(gridCanvas, gridSize);
-    const detected   = classifyCells(cells);
+    const detected   = await classifyCells(cells);
 
     job.editorState = { gridSize: gridSize, cells: new Map() };
     for (const t of detected) {
@@ -592,6 +595,9 @@ function scanJob(jobId) {
     refreshSidebar();
     updateBatchButtons();
     rerenderJobCard(job.id);
+
+    // Auto-generate immediately after scanning
+    await generateJob(job.id);
   } catch (err) {
     console.error(err);
     alert('Scan error (' + job.name + '): ' + err.message);
@@ -647,14 +653,21 @@ function exportJob(jobId) {
 // BATCH OPERATIONS
 // ==============================
 
-scanAllBtn.addEventListener('click', function() {
+scanAllBtn.addEventListener('click', async function() {
+  scanAllBtn.textContent = 'Scanning\u2026';
+  scanAllBtn.disabled = true;
+
   let scanned = 0;
   for (const job of jobs) {
     if (job.status === 'uploaded') {
-      try { scanJob(job.id); scanned++; }
+      try { await scanJob(job.id); scanned++; }
       catch (e) { console.error(e); }
     }
   }
+
+  scanAllBtn.textContent = 'Scan All';
+  scanAllBtn.disabled = false;
+
   if (scanned === 0) alert('All images already scanned');
 });
 
@@ -685,6 +698,16 @@ exportAllBtn.addEventListener('click', function() {
     }
   }
   if (count === 0) alert('No generated images to export');
+});
+
+clearAllBtn.addEventListener('click', function() {
+  if (!jobs.length) return;
+  if (!confirm('Remove all ' + jobs.length + ' image(s)?')) return;
+  jobs.length = 0;
+  nextJobId = 1;
+  refreshSidebar();
+  updateBatchButtons();
+  renderMainArea();
 });
 
 // ==============================
@@ -840,7 +863,7 @@ function splitIntoCells(gridCanvas, gridSize) {
 // CLASSIFY CELLS
 // ==============================
 
-function classifyCells(cells) {
+async function classifyCells(cells) {
   buildTemplates();
   const results = [];
 
@@ -848,7 +871,7 @@ function classifyCells(cells) {
     const type = classifyCell(cell.canvas);
     if (type === 'empty') continue;
 
-    const letter = recogniseLetter(cell.canvas, type === 'active');
+    const letter = await extractLetter(cell.canvas, type === 'active');
 
     results.push({
       row:    cell.row,
@@ -1019,7 +1042,7 @@ function matchScore(input, tmpl) {
   return den === 0 ? 0 : num / den;
 }
 
-function recogniseLetter(cellCanvas, isActive) {
+function recogniseLetterTemplate(cellCanvas, isActive) {
   buildTemplates();
 
   let rawBmp = extractCellBitmap(cellCanvas, isActive);
@@ -1045,6 +1068,172 @@ function recogniseLetter(cellCanvas, isActive) {
 
   console.log('  Template match: "' + bestLetter + '" (score ' + bestScore.toFixed(3) + ')');
   return bestLetter;
+}
+
+// ==============================
+// IMPROVED LETTER DETECTION (OCR)
+// ==============================
+
+/**
+ * Crop the centre of a cell canvas, removing grid lines and circular borders.
+ * @param {HTMLCanvasElement} canvas - The full cell canvas
+ * @param {number} cropRatio - Fraction of the canvas to KEEP (0.35 = 35%)
+ * @returns {HTMLCanvasElement} Cropped canvas
+ */
+function cropLetterRegion(canvas, cropRatio) {
+  const w = canvas.width;
+  const h = canvas.height;
+  const keepW = Math.round(w * cropRatio);
+  const keepH = Math.round(h * cropRatio);
+  const offX = Math.round((w - keepW) / 2);
+  const offY = Math.round((h - keepH) / 2);
+
+  const out = document.createElement('canvas');
+  out.width = keepW;
+  out.height = keepH;
+  out.getContext('2d').drawImage(canvas, offX, offY, keepW, keepH, 0, 0, keepW, keepH);
+  return out;
+}
+
+/**
+ * Upscale a canvas by a given factor with no smoothing (sharp pixel edges).
+ * @param {HTMLCanvasElement} canvas
+ * @param {number} factor - Upscale multiplier (e.g. 4)
+ * @returns {HTMLCanvasElement}
+ */
+function upscale(canvas, factor) {
+  const out = document.createElement('canvas');
+  out.width = canvas.width * factor;
+  out.height = canvas.height * factor;
+  const ctx = out.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(canvas, 0, 0, out.width, out.height);
+  return out;
+}
+
+/**
+ * Convert canvas to high-contrast black & white via thresholding.
+ * Active cells have white letters on dark bg; inactive cells have dark letters on light bg.
+ * @param {HTMLCanvasElement} canvas
+ * @param {boolean} isActive
+ * @returns {HTMLCanvasElement}
+ */
+function preprocess(canvas, isActive) {
+  const w = canvas.width;
+  const h = canvas.height;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const data = imgData.data;
+
+  // Threshold: for active cells, bright pixels are the letter (invert);
+  // for inactive cells, dark pixels are the letter.
+  const threshold = isActive ? 160 : 120;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    let isLetterPixel;
+    if (isActive) {
+      isLetterPixel = luma > threshold; // bright on dark
+    } else {
+      isLetterPixel = luma < threshold; // dark on light
+    }
+    // Tesseract expects dark text on white background
+    const val = isLetterPixel ? 0 : 255;
+    data[i] = val;
+    data[i + 1] = val;
+    data[i + 2] = val;
+    data[i + 3] = 255;
+  }
+
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  out.getContext('2d').putImageData(imgData, 0, 0);
+  return out;
+}
+
+// Lazily-initialised Tesseract worker
+let _ocrWorker = null;
+
+async function getOCRWorker() {
+  if (_ocrWorker) return _ocrWorker;
+  _ocrWorker = await Tesseract.createWorker('eng', 1, {
+    logger: DEBUG ? (m) => console.log('[Tesseract]', m) : undefined,
+  });
+  await _ocrWorker.setParameters({
+    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    tessedit_pageseg_mode: '10', // single character
+  });
+  return _ocrWorker;
+}
+
+/**
+ * Run the full improved letter-detection pipeline on one cell canvas.
+ * Tries several crop ratios and picks the result with highest OCR confidence.
+ * Falls back to template matching if OCR produces nothing.
+ *
+ * @param {HTMLCanvasElement} cellCanvas
+ * @param {boolean} isActive
+ * @returns {Promise<string>} Uppercase letter
+ */
+async function extractLetter(cellCanvas, isActive) {
+  const worker = await getOCRWorker();
+  const cropRatios = [0.35, 0.40, 0.45];
+  const upscaleFactor = 4;
+
+  let bestLetter = '';
+  let bestConf = -1;
+
+  for (const ratio of cropRatios) {
+    // 1. Crop centre
+    const cropped = cropLetterRegion(cellCanvas, ratio);
+    // 2. Upscale
+    const scaled = upscale(cropped, upscaleFactor);
+    // 3. High-contrast threshold
+    const bw = preprocess(scaled, isActive);
+
+    // DEBUG: show what OCR sees
+    if (DEBUG) {
+      const label = document.createElement('div');
+      label.style.cssText = 'color:#ccc;font-size:11px;margin:8px 4px 2px;font-family:monospace;';
+      label.textContent = (isActive ? 'ACTIVE' : 'INACTIVE') + ' crop=' + ratio;
+      document.body.appendChild(label);
+      bw.style.cssText = 'border:1px solid #555;margin:2px 4px;';
+      document.body.appendChild(bw.cloneNode(true));
+      // also draw the clone so the original stays usable
+      const clone = bw.cloneNode(true);
+      clone.getContext('2d').drawImage(bw, 0, 0);
+      document.body.appendChild(clone);
+    }
+
+    // 4. OCR
+    const { data } = await worker.recognize(bw);
+    const text = (data.text || '').trim().toUpperCase().replace(/[^A-Z]/g, '');
+    const conf = data.confidence || 0;
+
+    console.log('  OCR crop=' + ratio + ': "' + text + '" conf=' + conf);
+
+    if (text.length === 1 && conf > bestConf) {
+      bestConf = conf;
+      bestLetter = text;
+    }
+  }
+
+  // Fallback to template matching if OCR didn't produce a single letter
+  if (!bestLetter) {
+    console.log('  OCR failed, falling back to template matching');
+    bestLetter = recogniseLetterTemplate(cellCanvas, isActive);
+  } else {
+    console.log('  OCR best: "' + bestLetter + '" conf=' + bestConf);
+  }
+
+  return bestLetter;
+}
+
+// Synchronous wrapper kept for backward compat; prefer extractLetter for async callers
+function recogniseLetter(cellCanvas, isActive) {
+  // Template-match fallback used during synchronous scan
+  return recogniseLetterTemplate(cellCanvas, isActive);
 }
 
 // ==============================

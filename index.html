@@ -191,28 +191,34 @@
       overflow: hidden; background: #C28A31;
     }
     .editor-grid .ecell {
-      width: 42px; height: 42px; display: flex; align-items: center;
-      justify-content: center; position: relative; background: #1e293b;
+      width: 46px; height: 46px; display: flex; align-items: center;
+      justify-content: center; position: relative; background: #fcfcfc;
     }
-    .editor-grid .ecell.has-tile { background: #2d3a4d; }
+    .editor-grid .ecell.has-tile { background: #FADEB1; }
     .editor-grid .ecell.active-tile { background: #C28A31; }
     .editor-grid .ecell input {
-      width: 28px; height: 28px; border: 2px solid #475569; border-radius: 50%;
-      background: #334155; color: #e2e8f0; text-align: center;
+      width: 32px; height: 32px; border: 1.5px solid #C28A31; border-radius: 50%;
+      background: #FADEB1; color: #926725; text-align: center;
       font: bold 14px 'Inter', sans-serif; text-transform: uppercase;
       outline: none; padding: 0;
+      box-shadow: 0 1.5px 0 #C28A31;
+    }
+    .editor-grid .ecell:not(.has-tile) input {
+      background: #fcfcfc; border-color: #d4c5a0; color: #bbb;
+      box-shadow: none;
     }
     .editor-grid .ecell input:focus {
-      border-color: #C28A31; box-shadow: 0 0 0 2px rgba(194,138,49,.35);
+      border-color: #a37528; box-shadow: 0 0 0 2px rgba(194,138,49,.35);
     }
     .editor-grid .ecell.active-tile input {
-      background: #a37528; color: #fff; border-color: #d4a24a;
+      background: #C28A31; color: #fff; border-color: #d4a24a;
+      box-shadow: 0 1.5px 0 #a37528;
     }
     .ecell .toggle-type {
       position: absolute; top: 1px; right: 1px;
       width: 14px; height: 14px; border: none; border-radius: 3px;
       font-size: 8px; line-height: 14px; padding: 0; cursor: pointer;
-      background: #475569; color: #94a3b8; display: none;
+      background: #d4c5a0; color: #926725; display: none;
     }
     .ecell:hover .toggle-type, .ecell.has-tile .toggle-type { display: block; }
     .ecell.active-tile .toggle-type { background: #d4a24a; color: #fff; }
@@ -237,6 +243,7 @@
       <button id="scanAllBtn" class="hidden">Scan All</button>
       <button id="generateAllBtn" class="hidden">Generate All</button>
       <button id="exportAllBtn" class="btn-secondary hidden">Export All</button>
+      <button id="clearAllBtn" class="btn-secondary hidden">Clear All</button>
     </div>
   </header>
 
@@ -251,6 +258,7 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

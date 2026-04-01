@@ -50,12 +50,14 @@ const COLORS = {
 
 let bgImage = null;
 let svgLogo = null;
+let headlineSvg = null;
 
 async function loadAssets() {
   await document.fonts.ready;
-  const [bg, svg] = await Promise.all([loadImg('TraceBG.png'), loadImg('DM___Games.svg')]);
+  const [bg, svg, headline] = await Promise.all([loadImg('TraceBG.png'), loadImg('DM___Games.svg'), loadImg('headline.svg')]);
   bgImage = bg;
   svgLogo = svg;
+  headlineSvg = headline;
 }
 
 // ==============================
@@ -1061,12 +1063,13 @@ async function renderOutput(ctx, tiles, gridSize) {
     ctx.fillRect(0, 0, EXPORT_SIZE, EXPORT_SIZE);
   }
 
-  // 2. Title
-  ctx.font = '800 ' + s(LAYOUT.titleFontSize) + 'px "Literata"';
-  ctx.fillStyle = COLORS.titleText;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  ctx.fillText("Can you find today\u2019s word?", EXPORT_SIZE / 2, s(TEXT_TOP_Y));
+  // 2. Title (headline SVG)
+  if (headlineSvg) {
+    const hlW = s(250);
+    const hlH = s(19);
+    const hlX = (EXPORT_SIZE - hlW) / 2;
+    ctx.drawImage(headlineSvg, hlX, s(TEXT_TOP_Y), hlW, hlH);
+  }
 
   // 3. Grid
   const N  = gridSize;

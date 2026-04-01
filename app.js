@@ -436,6 +436,24 @@ function buildEditorGridUI(job) {
   gridEl.style.gridTemplateRows    = 'repeat(' + es.gridSize + ', 42px)';
   gridEl.style.gap = '1px';
 
+  // Helper: find the next (or prev) input that belongs to a tile cell
+  function findNextTileInput(fromRow, fromCol, forward) {
+    const total = es.gridSize * es.gridSize;
+    const startIdx = fromRow * es.gridSize + fromCol;
+    for (let step = 1; step < total; step++) {
+      const idx = forward
+        ? (startIdx + step) % total
+        : (startIdx - step + total) % total;
+      const r = Math.floor(idx / es.gridSize);
+      const c = idx % es.gridSize;
+      if (es.cells.has(r + ',' + c)) {
+        const inp = gridEl.querySelector('input[data-key="' + r + ',' + c + '"]');
+        if (inp) return inp;
+      }
+    }
+    return null;
+  }
+
   for (let row = 0; row < es.gridSize; row++) {
     for (let col = 0; col < es.gridSize; col++) {
       const key = row + ',' + col;
@@ -486,6 +504,13 @@ function buildEditorGridUI(job) {
             es.cells.delete(key);
             cell.classList.remove('has-tile', 'active-tile');
           }
+          // Tab / Shift+Tab: jump to next/prev tile cell
+          if (e.key === 'Tab') {
+            e.preventDefault();
+            const nextTile = findNextTileInput(row, col, !e.shiftKey);
+            if (nextTile) nextTile.focus();
+            return;
+          }
           let nr = row, nc = col;
           if (e.key === 'ArrowRight') nc = Math.min(col + 1, es.gridSize - 1);
           if (e.key === 'ArrowLeft')  nc = Math.max(col - 1, 0);
@@ -499,19 +524,15 @@ function buildEditorGridUI(job) {
         };
       })(row, col, key, cell, es, gridEl));
 
-      // Auto-advance
-      inp.addEventListener('input', (function(row, col, es, gridEl, inp) {
+      // Auto-advance to next tile cell after typing
+      inp.addEventListener('input', (function(row, col, inp) {
         return function() {
           if (inp.value) {
-            let nc2 = col + 1, nr2 = row;
-            if (nc2 >= es.gridSize) { nc2 = 0; nr2++; }
-            if (nr2 < es.gridSize) {
-              const next = gridEl.querySelector('input[data-key="' + nr2 + ',' + nc2 + '"]');
-              if (next) next.focus();
-            }
+            const nextTile = findNextTileInput(row, col, true);
+            if (nextTile) nextTile.focus();
           }
         };
-      })(row, col, es, gridEl, inp));
+      })(row, col, inp));
 
       tog.addEventListener('click', (function(key, cell, es) {
         return function(e) {
